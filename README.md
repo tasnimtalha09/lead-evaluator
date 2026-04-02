@@ -16,6 +16,8 @@ cross-validation stability, and ROC-AUC (OVR and Qualified-vs-Not). After compar
 
 Explainability was supported through **feature importance** and **SHAP** analysis, showing that the model is primarily driven by high-signal business variables such as **urgency**, **expected monthly volume**, and **credibility indicators** (e.g., Google review count), aligning well with real-world sales logic.
 
+***A video presentation explaining the project can be found [here](https://www.linkedin.com/posts/tasnimtalha09_i-built-a-%F0%9D%97%BA%F0%9D%97%AE%F0%9D%97%B0%F0%9D%97%B5%F0%9D%97%B6%F0%9D%97%BB%F0%9D%97%B2-%F0%9D%97%B9%F0%9D%97%B2%F0%9D%97%AE%F0%9D%97%BF%F0%9D%97%BB%F0%9D%97%B6%F0%9D%97%BB%F0%9D%97%B4-activity-7444948862731186176-6_kt?utm_source=social_share_send&utm_medium=member_desktop_web&rcm=ACoAADzHX0oB0t4dpMRgmmkbZZhC5z3UQS7rZrw).***
+
 
 # Business Problem
 

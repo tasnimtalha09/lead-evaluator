@@ -83,7 +83,6 @@ def score_to_action(score: float) -> str:
     return "Deprioritize"
 
 
-
 # creating the main prediction function
 
 # scoring new leads end-to-end: preprocess → predict bucket → compute QualifiedScore → assign action.

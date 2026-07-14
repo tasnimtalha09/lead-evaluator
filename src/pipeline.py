@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 # resolving the path to the artifacts folder relative to this script
-ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
+ARTIFACT_DIR = Path(__file__).resolve().parent.parent / "artifacts"
 
 # loading the saved artifacts from the artifacts directory
 cat_model = joblib.load(filename = ARTIFACT_DIR / "catboost_tuned.joblib")

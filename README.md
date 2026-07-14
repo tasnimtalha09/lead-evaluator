@@ -1,6 +1,8 @@
 <div style="text-align: justify;">
 
-# Executive Summary
+# Lead Evaluator for Swan Chemicals Ltd.
+
+## Executive Summary
 
 This project develops a **Lead Evaluator** system for **Swan Chemical Ltd.** to support faster and more consistent sales prioritization in the adhesives business. The model predicts a lead's **bucket**—Hot, Warm, Cold, Save For Later, or Reject—based on operational feasibility, commercial potential, and credibility signals. In addition to the bucket prediction, the system produces a probability-based **lead score** (**QualifiedScore = P(Hot) + P(Warm)**) and maps it to simple actions (**Prioritize**/**Nurture**/**Deprioritize**)
 for practical business use.
@@ -19,7 +21,7 @@ Explainability was supported through **feature importance** and **SHAP** analysi
 ***A video presentation explaining the project can be found [here](https://www.linkedin.com/posts/tasnimtalha09_i-built-a-%F0%9D%97%BA%F0%9D%97%AE%F0%9D%97%B0%F0%9D%97%B5%F0%9D%97%B6%F0%9D%97%BB%F0%9D%97%B2-%F0%9D%97%B9%F0%9D%97%B2%F0%9D%97%AE%F0%9D%97%BF%F0%9D%97%BB%F0%9D%97%B6%F0%9D%97%BB%F0%9D%97%B4-activity-7444948862731186176-6_kt?utm_source=social_share_send&utm_medium=member_desktop_web&rcm=ACoAADzHX0oB0t4dpMRgmmkbZZhC5z3UQS7rZrw).***
 
 
-# Business Problem
+## Business Problem
 
 Sales teams often receive numerous inquiries, but not all leads are worth the equal effort. Some companies are genuinely high-potential buyers, while others are low-volume, unready, unreachable, or unreliable. Spending time on poor-fit leads increases cost and delays follow-up on qualified opportunities.
 
@@ -34,13 +36,13 @@ A reliable lead evaluation system helps Swan Chemical Ltd.:
 * Improve response speed and customer experience through quicker triage
 
 
-# Methodology
+## Methodology
 
-## Data Preparation
+### Data Preparation
 
 The dataset was designed to simulate the information a real sales team can collect at the lead stage. It includes operational variables (distance, urgency), commercial variables (expected demand, order frequency), and credibility/intent signals (purchase stage, credibility level, online presence).
 
-### Feature Engineering & Encoding
+#### Feature Engineering & Encoding
 
 **To prepare the data for modeling:**
 1. **Ordinal variables** (where order matters) were encoded using **Ordinal Encoding**, including`employee_estimate`, `credibility_level`, and `purchase_stage`.
@@ -48,7 +50,7 @@ The dataset was designed to simulate the information a real sales team can colle
 3. **Numeric variables** were standardized using **StandardScaler** where appropriate.
 4. The pipeline was designed to avoid leakage by fitting encoders/scalers only on training data and transforming test data using the fitted artifacts.
 
-## Model Training & Performance Evaluation
+### Model Training & Performance Evaluation
 
 We trained and compared **five** multi-class classification models:
 1. Multinomial Logistic Regression
@@ -69,7 +71,7 @@ All models were evaluated on the held-out test set using:
 * 5-Fold Cross Validation **(Accuracy and Macro F1)**
 
 
-## Model Selection & Validation Strategy
+### Model Selection & Validation Strategy
 
 Because this is a **multi-class** and **business-prioritization**
 problem, the selection emphasized metrics that reflect balanced class
@@ -86,7 +88,7 @@ performance and generalization:
 From the comparison, **CatBoost** consistently performed best across Macro F1 and AUC metrics while maintaining strong generalization after
 tuning.
 
-### Model Comparison Summary
+#### Model Comparison Summary
 A summary of model performance of the **five** models is presented below:
 
 ***Table 01:** All Model Performance Summary.*
@@ -100,11 +102,11 @@ A summary of model performance of the **five** models is presented below:
 
 The CatBoost model outperformed the others in Macro F1, AUC metrics, and had a reasonable overfitting gap. It also showed strong cross-validation stability, making it the best candidate for final tuning and deployment. Further hyperparameter tuning was performed on CatBoost to improve performance and reduce overfitting.
 
-# Final Model Tuning & Selection
+## Final Model Tuning & Selection
 
 The CatBoost model was tuned using **Optuna TPE (Bayesian Optimization)** to improve performance and reduce overfitting.
 
-## Best Parameters (Optuna TPE)
+### Best Parameters (Optuna TPE)
 
 The final tuned model used the following best parameters:
 
@@ -117,14 +119,14 @@ The final tuned model used the following best parameters:
 * `border_count = 255`
 * `random_strength = 2`
 
-### Key Takeaways
+#### Key Takeaways
 
 * Best cross-validation Macro F1 during search: **0.7835**
 * Overfitting reduced substantially compared to baseline CatBoost
 * Final tuned model showed strong balance across all lead buckets
 
 
-## Model Performance
+### Model Performance
 
 ***Table 02:** Tuned CatBoost Model Performance Summary.*
 | **Metric** | **Test/CV Performance** |
@@ -143,13 +145,13 @@ The final tuned model used the following best parameters:
 
 ***Overfitting criteria (based on Train–Test Macro F1 gap):** Good (<10%), Moderate (10–20%), High (>20%)
 
-### Key Insights
+#### Key Insights
 
 * The tuned CatBoost model delivers strong balanced classification performance across all five buckets, validated by Macro F1.
 * Overfitting is low (4.22% gap), indicating solid generalization to unseen lead profiles.
 * High AUC values confirm strong ranking ability, especially for the core business triage decision: identifying qualified opportunities (Hot/Warm).
 
-## Top Features
+### Top Features
 
 **Methodology:** Both **SHAP (Shapley Additive exPlanations)** values and **native CatBoost feature importance rankings** were used to identify key revenue drivers through bar charts, beeswarm plots, and numerical importance scores.
 
@@ -159,7 +161,7 @@ The final tuned model used the following best parameters:
 ![Individual Result](assets/shap_02.png)
 ***Figure 02:** For one specific company, why did the model predict a particular value??*
 
-### Key Findings
+#### Key Findings
 Across the three explanation lenses—**CatBoost split-based importance**, **SHAP average impact (global)**, and a **SHAP waterfall (individual case)**—a consistent story emerges: **lead urgency drives prioritization**, **expected demand determines commercial value**, and **credibility signals refine borderline decisions rather than override the core drivers.**
 
 * **Urgency is the dominant driver of lead prioritization:** `urgency_days` ranks as the clear number 01 feature in both CatBoost importance and SHAP global impact. In the waterfall example, it contributes the largest positive shift, indicating that near-term demand strongly pushes leads toward **Warm/Hot** classifications.
@@ -176,13 +178,13 @@ Across the three explanation lenses—**CatBoost split-based importance**, **SHA
 Lead qualification in this model is fundamentally **urgency-led** and **value-shaped**. Credibility and intent signals improve confidence and help resolve borderline cases, while operational factors fine-tune decisions without driving them.
 
 
-# Model Deployment & Testing
+## Model Deployment & Testing
 
 The **`lead_evaluator.ipynb`** notebook serves as the development environment for cleaning, training, evaluation, and tuning. For business-side usage, the model is deployed through saved artifacts and lightweight scripts:
 
 1.  All fitted components (CatBoost model, encoders, scaler, metadata) are saved into the [**`artifacts`**](./artifacts/) folder.
-2.  A production module [**`pipeline.py`**](./pipeline.py) loads these artifacts and exposes a clean `predict_leads()` function.
-3.  A runner script [**`score_new_leads.py`**](./score_new_leads.py) reads a CSV of new leads and outputs:
+2.  A production module [**`pipeline.py`**](./src/pipeline.py) loads these artifacts and exposes a clean `predict_leads()` function.
+3.  A runner script [**`score_new_leads.py`**](./src/score_new_leads.py) reads a CSV of new leads and outputs:
     * Predicted lead bucket
     * Probability-based lead score (QualifiedScore)
     * Recommended action (Prioritize / Nurture / Deprioritize)
@@ -190,7 +192,7 @@ The **`lead_evaluator.ipynb`** notebook serves as the development environment fo
 This separation allows real usage without exposing training code.
 
 
-# Conclusion
+## Conclusion
 
 This project delivered a practical MVP that transforms lead information into clear, business-ready outputs. The tuned CatBoost model provides strong multi-class performance, low overfitting, and excellent separation for qualified vs non-qualified leads. Combined with a probability-based lead score and an action rule, the system is suitable for real-world lead triage and can be improved further as Swan Chemical Ltd. accumulates real lead outcomes and feedback.
 

@@ -1,78 +1,103 @@
 # importing the necessary libraries
 from __future__ import annotations
-import pandas as pd
-import numpy as np
+import warnings
 import joblib
+import numpy as np
+import pandas as pd
 from pathlib import Path
 
 
 # resolving the path to the artifacts folder relative to this script
 ARTIFACT_DIR = Path(__file__).resolve().parent.parent / "artifacts"
 
-# loading the saved artifacts from the artifacts directory
-cat_model = joblib.load(filename = ARTIFACT_DIR / "catboost_tuned.joblib")
-ordinal_encoder = joblib.load(filename = ARTIFACT_DIR / "ordinal_encoder.joblib")
-onehot_encoder = joblib.load(filename = ARTIFACT_DIR / "onehot_encoder.joblib")
-scaler = joblib.load(filename = ARTIFACT_DIR / "scaler.joblib")
+# loading the saved pipeline (preprocessing + tuned CatBoost in one object) and its metadata
+lead_pipeline = joblib.load(filename = ARTIFACT_DIR / "lead_evaluator_pipeline.joblib")
 metadata = joblib.load(filename = ARTIFACT_DIR / "metadata.joblib")
 
 # extracting metadata into module-level constants
-ORDINAL_COLS = metadata["ordinal_cols"]
-ONEHOT_COLS = metadata["onehot_cols"]
+INPUT_COLUMNS = metadata["input_columns"]
 NUMERIC_COLS = metadata["numeric_cols"]
-FEATURE_COLUMNS = metadata["feature_columns"]
-EMP_ORDER = metadata["employee_order"]
-CRED_ORDER = metadata["credibility_order"]
-PURCHASE_ORDER = metadata["purchase_stage_order"]
-YN_MAP = metadata["yn_map"]
+CATEGORY_LEVELS = metadata["category_levels"]
+NUMERIC_RANGES = metadata["numeric_ranges"]
 THR_PRIORITIZE = metadata["qualified_thresholds"]["prioritize"]
 THR_NURTURE = metadata["qualified_thresholds"]["nurture"]
+
+# spellings of Yes/No that new files may use (True/False, 1/0, yes/no in any case); the model was trained on "Yes"/"No" text
+YES_NO_LEVELS = {"Yes", "No"}
+YES_NO_MAP = {"yes": "Yes", "true": "Yes", "1": "Yes", "1.0": "Yes", "no": "No", "false": "No", "0": "No", "0.0": "No"}
 
 
 # creating the helper functions
 
-# converting a Yes/No or True/False series to integer (1/0)
-def _yes_no_to_int(series: pd.Series) -> pd.Series:
-    return series.map(YN_MAP).fillna(0).astype(int)
+# selecting the model inputs from the raw leads and fixing their types (the preprocessing itself lives inside the saved pipeline)
+def _prepare_inputs(raw_df: pd.DataFrame) -> pd.DataFrame:
 
-# applying the exact same preprocessing pipeline used during training: drop non-features → boolean conversion → ordinal encoding → one-hot encoding → scaling → column alignment
-def preprocess(raw_df: pd.DataFrame) -> pd.DataFrame:
+    # keeping only the columns the model was trained on (company_name, lead_bucket and other extras are ignored)
+    X = raw_df[INPUT_COLUMNS].copy()
 
-    # creating a copy to avoid mutating the original dataframe
-    df = raw_df.copy()
+    # turning text or invalid numbers into missing values, so that they are flagged instead of crashing
+    for col in NUMERIC_COLS:
+        X[col] = pd.to_numeric(X[col], errors = "coerce")
 
-    # 1. dropping non-feature columns
-    drop_cols = ["company_name", "lead_bucket", "lead_score", "actual_lead_score"]
-    df = df.drop(columns = [c for c in drop_cols if c in df.columns])
+    # turning every categorical column into clean text, because the encoders were fitted on text (numbers or True/False would crash them or be mistaken for new categories)
+    for col, levels in CATEGORY_LEVELS.items():
+        text = X[col].astype(object)
+        present = text.notna()
+        text[present] = text[present].astype(str).str.strip()
 
-    # 2. converting Yes/No boolean fields to 1/0
-    for col in ["has_google_listing", "has_phone"]:
-        if col in df.columns:
-            df[col] = _yes_no_to_int(df[col])
+        # Yes/No columns (e.g. has_phone): True/False, 1/0 and yes/no are all converted back to "Yes"/"No"
+        if set(levels) <= YES_NO_LEVELS:
+            text[present] = text[present].str.lower().map(YES_NO_MAP).fillna(text[present])
 
-    # 3. setting ordinal categories (same order as training)
-    df["employee_estimate"] = pd.Categorical(df["employee_estimate"], categories = EMP_ORDER, ordered = True)
-    df["credibility_level"] = pd.Categorical(df["credibility_level"], categories = CRED_ORDER, ordered = True)
-    df["purchase_stage"] = pd.Categorical(df["purchase_stage"], categories = PURCHASE_ORDER, ordered = True)
+        X[col] = text
 
-    # 4. ordinal encoding
-    df[ORDINAL_COLS] = ordinal_encoder.transform(df[ORDINAL_COLS])
+    return X
 
-    # 5. one-hot encoding
-    oh = pd.DataFrame(
-        onehot_encoder.transform(df[ONEHOT_COLS]),
-        columns = onehot_encoder.get_feature_names_out(ONEHOT_COLS),
-        index = df.index,
+
+# checking every lead before scoring: missing or impossible values block the scoring, odd-but-usable values only add a note
+def check_leads(raw_df: pd.DataFrame) -> pd.DataFrame:
+
+    X = _prepare_inputs(raw_df)
+    blocked = pd.Series(False, index = X.index)
+    notes = [[] for _ in range(len(X))]
+
+    # 1. missing values: CatBoost would silently treat a missing number as the smallest value (for urgency_days that means "most urgent"), so these leads are not scored
+    for col in X.columns:
+        missing = X[col].isna().to_numpy()
+        blocked |= missing
+        for i in np.flatnonzero(missing):
+            notes[i].append(f"{col} missing")
+
+    # 2. impossible values: none of the numeric fields can be negative
+    for col in NUMERIC_COLS:
+        negative = (X[col] < 0).fillna(False).to_numpy()
+        blocked |= negative
+        for i in np.flatnonzero(negative):
+            notes[i].append(f"{col} negative")
+
+    # 3. values outside the range seen in training: the lead is still scored, but the model is extrapolating
+    for col in NUMERIC_COLS:
+        low, high = NUMERIC_RANGES[col]
+        outside = (((X[col] < low) & (X[col] >= 0)) | (X[col] > high)).fillna(False).to_numpy()
+        for i in np.flatnonzero(outside):
+            notes[i].append(f"{col} outside training range ({low:g} to {high:g})")
+
+    # 4. categories never seen in training: the encoders silently ignore them
+    for col, levels in CATEGORY_LEVELS.items():
+        unseen = (~X[col].isin(levels) & X[col].notna()).to_numpy()
+        for i in np.flatnonzero(unseen):
+            notes[i].append(f"unseen {col} value '{X[col].iloc[i]}'")
+
+    # 5. zero volume usually means "volume not provided" (most such leads still order weekly or monthly)
+    volume_col = "expected_monthly_volume_liters"
+    if volume_col in X.columns:
+        for i in np.flatnonzero((X[volume_col] == 0).fillna(False).to_numpy()):
+            notes[i].append("volume not provided (0 liters)")
+
+    return pd.DataFrame(
+        {"blocked": blocked.to_numpy(), "data_flag": ["; ".join(n) for n in notes]},
+        index = raw_df.index
     )
-    df = df.drop(columns = ONEHOT_COLS).join(oh)
-
-    # 6. standard scaling on numeric columns
-    df[NUMERIC_COLS] = scaler.transform(df[NUMERIC_COLS])
-
-    # 7. reindex to match exact training column order (any missing columns filled with 0, any extra columns dropped)
-    df = df.reindex(columns = FEATURE_COLUMNS, fill_value = 0)
-
-    return df
 
 # mapping a qualifiedScore (0–100) to a business action: >= 70: Prioritize (Sales); >= 40: Nurture (Follow-up); <  40: Deprioritize
 def score_to_action(score: float) -> str:
@@ -85,37 +110,52 @@ def score_to_action(score: float) -> str:
 
 # creating the main prediction function
 
-# scoring new leads end-to-end: preprocess → predict bucket → compute QualifiedScore → assign action.
+# scoring new leads end-to-end: check inputs → predict probabilities → pick bucket → compute QualifiedScore → assign action
 def predict_leads(raw_df: pd.DataFrame) -> pd.DataFrame:
 
-    # preprocessing the raw input dataframe
-    X = preprocess(raw_df)
+    # stopping early if a required column is absent from the file
+    missing_cols = [c for c in INPUT_COLUMNS if c not in raw_df.columns]
+    if missing_cols:
+        raise ValueError(f"Input is missing required column(s): {missing_cols}")
 
-    # generating predicted class probabilities
-    proba = cat_model.predict_proba(X)
+    # flagging leads that cannot be scored safely
+    checks = check_leads(raw_df)
+    scorable = ~checks["blocked"].to_numpy()
 
-    # retrieving class labels
-    classes = cat_model.classes_
-    class_to_idx = {c: i for i, c in enumerate(classes)}
+    # starting with "not scored" for every lead, then filling in the scorable ones
+    pred_bucket = np.full(len(raw_df), "Needs review", dtype = object)
+    lead_score = np.full(len(raw_df), np.nan)
+    action = np.full(len(raw_df), "Check data first", dtype = object)
 
-    # finding Hot and Warm column indices
-    hot_idx = class_to_idx["Hot"]
-    warm_idx = class_to_idx["Warm"]
+    if scorable.any():
 
-    # predicting the most likely lead bucket
-    pred_bucket = np.array(cat_model.predict(X)).ravel()
+        # predicting class probabilities with the saved pipeline (it encodes the raw columns itself)
+        X = _prepare_inputs(raw_df).loc[scorable]
+        with warnings.catch_warnings():
+            warnings.filterwarnings(action = "ignore", message = "Found unknown categories")
+            proba = lead_pipeline.predict_proba(X)
 
-    # computing QualifiedScore = 100 × (P(Hot) + P(Warm))
-    lead_score = 100.0 * (proba[:, hot_idx] + proba[:, warm_idx])
-    lead_score = np.round(lead_score, 1)
+        # retrieving class labels and the Hot and Warm column indices
+        classes = np.array(lead_pipeline.classes_)
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+        hot_idx = class_to_idx["Hot"]
+        warm_idx = class_to_idx["Warm"]
 
-    # mapping each score to a business action
-    action = np.array([score_to_action(s) for s in lead_score])
+        # predicting the most likely lead bucket
+        pred_bucket[scorable] = classes[np.argmax(proba, axis = 1)]
+
+        # computing QualifiedScore = 100 × (P(Hot) + P(Warm))
+        scores = np.round(100.0 * (proba[:, hot_idx] + proba[:, warm_idx]), 1)
+        lead_score[scorable] = scores
+
+        # mapping each score to a business action
+        action[scorable] = [score_to_action(s) for s in scores]
 
     # appending predictions to a copy of the original dataframe
     out = raw_df.copy()
     out["pred_bucket"] = pred_bucket
     out["lead_score"] = lead_score
     out["action"] = action
+    out["data_flag"] = checks["data_flag"].to_numpy()
 
     return out

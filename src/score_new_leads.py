@@ -12,7 +12,7 @@ from pipeline import predict_leads
 # parsing the command-line arguments for the scoring script
 def parse_args() -> argparse.Namespace:
 
-    parser = argparse.ArgumentParser(description = "Score Swan Chemical leads using the saved Lead Evaluator artifacts.")
+    parser = argparse.ArgumentParser(description = "Score Swan Chemical leads using the saved Lead Evaluator pipeline.")
 
     # positional argument for the input CSV file path
     parser.add_argument(
@@ -68,10 +68,13 @@ def main() -> None:
         out.insert(
             loc = out.columns.get_loc("Predicted Lead Bucket") + 1,
             column = "Status",
-            value = np.where(
-                out["Actual Lead Bucket"] == out["Predicted Lead Bucket"],
-                "Match",
-                "Mismatch"
+            value = np.select(
+                condlist = [
+                    results["action"] == "Check data first",
+                    out["Actual Lead Bucket"] == out["Predicted Lead Bucket"]
+                ],
+                choicelist = ["Not scored", "Match"],
+                default = "Mismatch"
             )
         )
 
@@ -91,20 +94,32 @@ def main() -> None:
     # adding the recommended action
     out["Action"] = results["action"]
 
+    # adding the data flag (empty when the lead looks fine)
+    out["Data Flag"] = results["data_flag"]
+
     # printing the results table
     print(out.to_string(index = False))
 
+    # summarizing the data checks (leads with missing or impossible values are not scored)
+    not_scored = int((results["action"] == "Check data first").sum())
+    flagged = int((results["data_flag"] != "").sum())
+    if flagged > 0:
+        print(f"\nData checks: {flagged} lead(s) flagged, {not_scored} not scored (see the Data Flag column)")
+
+    # keeping only the scored leads for the accuracy figures
+    scored = out[results["action"] != "Check data first"]
+
     # computing bucket accuracy if actual labels exist
-    if len(out) > 1 and "Actual Lead Bucket" in out.columns:
-        matches = (out["Actual Lead Bucket"].values == out["Predicted Lead Bucket"].values)
+    if len(scored) > 1 and "Actual Lead Bucket" in scored.columns:
+        matches = (scored["Actual Lead Bucket"].values == scored["Predicted Lead Bucket"].values)
         correct = int(matches.sum())
-        total = int(len(out))
+        total = int(len(scored))
         acc = 100.0 * correct / total
         print(f"\nBucket Accuracy: {acc:.0f}% ({correct}/{total})")
 
     # computing average score difference if actual scores exist
-    if len(out) > 1 and "Score Difference" in out.columns:
-        avg_diff = float(out["Score Difference"].mean())
+    if len(scored) > 1 and "Score Difference" in scored.columns:
+        avg_diff = float(scored["Score Difference"].mean())
         print(f"Average Score Difference: {avg_diff:.1f} points")
 
     # saving output to CSV if requested
